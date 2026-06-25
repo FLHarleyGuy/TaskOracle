@@ -1,7 +1,7 @@
 // Task Oracle — Service Worker
 // Caches the app shell so it works offline after the first load.
 
-const CACHE_NAME = 'task-oracle-v2';
+const CACHE_NAME = 'task-oracle-v3';
 
 // Everything we want available offline
 const ASSETS_TO_CACHE = [
