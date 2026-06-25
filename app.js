@@ -1,198 +1,368 @@
 // ============================================================
-// Task Oracle — app.js
+// Task Oracle — app.js  (v2 — Campaigns)
 // D20-powered productivity oracle. Roll the die. Do the thing.
 // ============================================================
+// v2 adds Campaigns: up to 4 named boards, each with its own
+// tasks, curse deck, and buff deck. Switch via the bottom bar.
+//
 // Architecture:
 //   - All data lives in localStorage (no server needed)
 //   - One global `state` object drives everything
+//   - state.campaigns[] holds each campaign object
+//   - activeCampaign() returns whichever one is currently active
 //   - Views are HTML divs toggled with showView()
 //   - Modals are separate overlays
 // ============================================================
 
 
 // ────────────────────────────────────────────────────────────
-// DEFAULT DATA — seeds the app on first launch
+// DEFAULT DATA — seeds a fresh campaign on first launch
 // ────────────────────────────────────────────────────────────
 
 const DEFAULT_TASKS = [
-  {
-    id: 'task-default-1',
-    title: 'Clear the sink',
-    desc: 'Dishes and counters.',
-    vibe: 1,            // 1-5 desirability rating
-    zone: 'challenge',  // derived from vibe: 1-2=challenge, 3=neutral, 4-5=reward
-    minutes: 15,
-    keep: 'keep',       // 'keep' | 'remove' | 'ask'
-    completedAt: null
-  },
-  {
-    id: 'task-default-2',
-    title: 'Tackle the inbox',
-    desc: 'Process email or messages.',
-    vibe: 2,
-    zone: 'challenge',
-    minutes: 20,
-    keep: 'keep',
-    completedAt: null
-  },
-  {
-    id: 'task-default-3',
-    title: 'Hobby time',
-    desc: 'Whatever you\'ve been putting off.',
-    vibe: 5,
-    zone: 'reward',
-    minutes: 30,
-    keep: 'keep',
-    completedAt: null
-  },
-  {
-    id: 'task-default-4',
-    title: 'Read something good',
-    desc: 'Book, article — your call.',
-    vibe: 4,
-    zone: 'reward',
-    minutes: 25,
-    keep: 'keep',
-    completedAt: null
-  },
-  {
-    id: 'task-default-5',
-    title: 'Take a walk',
-    desc: 'Outside. Counts.',
-    vibe: 4,
-    zone: 'reward',
-    minutes: 20,
-    keep: 'keep',
-    completedAt: null
-  }
+  { id: 'task-d1', title: 'Clear the sink',     desc: 'Dishes and counters.',             vibe: 1, zone: 'challenge', minutes: 15, keep: 'keep', completedAt: null },
+  { id: 'task-d2', title: 'Tackle the inbox',   desc: 'Process email or messages.',        vibe: 2, zone: 'challenge', minutes: 20, keep: 'keep', completedAt: null },
+  { id: 'task-d3', title: 'Hobby time',         desc: 'Whatever you\'ve been putting off.',vibe: 5, zone: 'reward',    minutes: 30, keep: 'keep', completedAt: null },
+  { id: 'task-d4', title: 'Read something good',desc: 'Book, article — your call.',        vibe: 4, zone: 'reward',    minutes: 25, keep: 'keep', completedAt: null },
+  { id: 'task-d5', title: 'Take a walk',        desc: 'Outside. Counts.',                  vibe: 4, zone: 'reward',    minutes: 20, keep: 'keep', completedAt: null }
 ];
 
 const DEFAULT_CURSES = [
-  { id: 'curse-1', text: 'Double the time on your next challenge task.', enabled: true },
-  { id: 'curse-2', text: 'Do the least desirable available task for 20 minutes before rolling again.', enabled: true },
-  { id: 'curse-3', text: 'Add one task you have been ignoring back onto the board.', enabled: true },
-  { id: 'curse-4', text: 'No rerolls allowed for your next roll.', enabled: true },
-  { id: 'curse-5', text: 'Clean or organize one small area before rolling again.', enabled: true },
-  { id: 'curse-6', text: 'If your next roll lands on a reward, cut its time in half.', enabled: true }
+  { id: 'curse-d1', text: 'Double the time on your next challenge task.',                            enabled: true },
+  { id: 'curse-d2', text: 'Do the least desirable available task for 20 minutes before rolling again.', enabled: true },
+  { id: 'curse-d3', text: 'Add one task you have been ignoring back onto the board.',                enabled: true },
+  { id: 'curse-d4', text: 'No rerolls allowed for your next roll.',                                  enabled: true },
+  { id: 'curse-d5', text: 'Clean or organize one small area before rolling again.',                  enabled: true },
+  { id: 'curse-d6', text: 'If your next roll lands on a reward, cut its time in half.',              enabled: true }
 ];
 
 const DEFAULT_BUFFS = [
-  { id: 'buff-1', text: 'Choose any task from the reward zone — your pick.', enabled: true },
-  { id: 'buff-2', text: 'Extend your current reward activity by 15 minutes.', enabled: true },
-  { id: 'buff-3', text: 'Skip one challenge task today.', enabled: true },
-  { id: 'buff-4', text: 'Bank a free reroll — use it any time.', enabled: true },
-  { id: 'buff-5', text: 'Convert one chore into a 10-minute mini-version.', enabled: true },
-  { id: 'buff-6', text: 'Take a reward break before your next challenge roll.', enabled: true }
+  { id: 'buff-d1', text: 'Choose any task from the reward zone — your pick.',       enabled: true },
+  { id: 'buff-d2', text: 'Extend your current reward activity by 15 minutes.',      enabled: true },
+  { id: 'buff-d3', text: 'Skip one challenge task today.',                           enabled: true },
+  { id: 'buff-d4', text: 'Bank a free reroll — use it any time.',                   enabled: true },
+  { id: 'buff-d5', text: 'Convert one chore into a 10-minute mini-version.',        enabled: true },
+  { id: 'buff-d6', text: 'Take a reward break before your next challenge roll.',     enabled: true }
 ];
 
 const DEFAULT_SETTINGS = {
-  neutralBehavior: 'reroll', // 'reroll' | 'choice' | 'pool'
+  neutralBehavior: 'reroll',
   rerolls: 0
 };
 
+// Emoji options shown in the campaign picker
+const CAMPAIGN_EMOJIS = ['🎯','🏠','🏢','💑','💪','📚','🎮','🎨','🌱','🚗','💰','⭐','🔥','🧹','🎵','🌙'];
+
 
 // ────────────────────────────────────────────────────────────
-// STATE — the single source of truth for the app
+// STATE
 // ────────────────────────────────────────────────────────────
 
 let state = {
-  tasks: [],
-  curses: [],
-  buffs: [],
-  settings: {},
+  campaigns:        [],   // array of { id, name, emoji, tasks, curses, buffs }
+  activeCampaignId: '',   // id of the active campaign
+  settings:         {},   // global (neutral behavior, rerolls)
 
-  // Roll session (reset each roll)
-  lastRoll: null,       // the number 1-20
-  currentTask: null,    // task object or null
-  currentCard: null,    // curse/buff card object or null
-  currentZone: null,    // 'challenge' | 'neutral' | 'reward' | 'curse' | 'buff'
+  // Roll session
+  lastRoll:     null,
+  currentTask:  null,
+  currentCard:  null,
+  currentZone:  null,
 
   // Timer session
-  timerDuration: 0,     // total seconds
-  timerRemaining: 0,    // seconds left
-  timerInterval: null,  // setInterval handle
-  timerRunning: false,
-  timerTaskTitle: ''
+  timerDuration:   0,
+  timerRemaining:  0,
+  timerInterval:   null,
+  timerRunning:    false,
+  timerTaskTitle:  ''
 };
+
+// Helper: always returns the active campaign object
+function activeCampaign() {
+  return state.campaigns.find(c => c.id === state.activeCampaignId)
+      || state.campaigns[0];
+}
+
+// Helper: make a fresh default campaign with its own copy of default data
+function makeDefaultCampaign(name, emoji) {
+  return {
+    id:     makeId(),
+    name:   name   || 'My Tasks',
+    emoji:  emoji  || '🎯',
+    tasks:  DEFAULT_TASKS.map(t  => ({...t,  id: makeId()})),
+    curses: DEFAULT_CURSES.map(c => ({...c,  id: makeId()})),
+    buffs:  DEFAULT_BUFFS.map(b  => ({...b,  id: makeId()}))
+  };
+}
 
 
 // ────────────────────────────────────────────────────────────
-// PERSISTENCE — save/load from localStorage
+// PERSISTENCE
 // ────────────────────────────────────────────────────────────
 
 function saveState() {
-  localStorage.setItem('taskOracle_tasks',    JSON.stringify(state.tasks));
-  localStorage.setItem('taskOracle_curses',   JSON.stringify(state.curses));
-  localStorage.setItem('taskOracle_buffs',    JSON.stringify(state.buffs));
-  localStorage.setItem('taskOracle_settings', JSON.stringify(state.settings));
+  localStorage.setItem('taskOracle_campaigns',      JSON.stringify(state.campaigns));
+  localStorage.setItem('taskOracle_activeCampaign', state.activeCampaignId);
+  localStorage.setItem('taskOracle_settings',       JSON.stringify(state.settings));
 }
 
 function loadState() {
-  // Load each piece, falling back to defaults if nothing saved yet
-  state.tasks    = JSON.parse(localStorage.getItem('taskOracle_tasks'))    || DEFAULT_TASKS.map(t => ({...t}));
-  state.curses   = JSON.parse(localStorage.getItem('taskOracle_curses'))   || DEFAULT_CURSES.map(c => ({...c}));
-  state.buffs    = JSON.parse(localStorage.getItem('taskOracle_buffs'))    || DEFAULT_BUFFS.map(b => ({...b}));
+  // ── Migration: v1 stored tasks/curses/buffs at the top level ──
+  // If old keys exist and no campaigns key, wrap them into a first campaign.
+  const oldTasks = localStorage.getItem('taskOracle_tasks');
+  if (oldTasks && !localStorage.getItem('taskOracle_campaigns')) {
+    const migrated = {
+      id:     makeId(),
+      name:   'My Tasks',
+      emoji:  '🎯',
+      tasks:  JSON.parse(oldTasks) || [],
+      curses: JSON.parse(localStorage.getItem('taskOracle_curses')) || DEFAULT_CURSES.map(c => ({...c})),
+      buffs:  JSON.parse(localStorage.getItem('taskOracle_buffs'))  || DEFAULT_BUFFS.map(b => ({...b}))
+    };
+    state.campaigns        = [migrated];
+    state.activeCampaignId = migrated.id;
+    state.settings = JSON.parse(localStorage.getItem('taskOracle_settings')) || {...DEFAULT_SETTINGS};
+    // Remove old keys so we don't migrate again
+    ['taskOracle_tasks','taskOracle_curses','taskOracle_buffs'].forEach(k => localStorage.removeItem(k));
+    saveState();
+    return;
+  }
+
+  // ── Normal load ──
+  const campaigns = JSON.parse(localStorage.getItem('taskOracle_campaigns'));
+  if (campaigns && campaigns.length > 0) {
+    state.campaigns        = campaigns;
+    state.activeCampaignId = localStorage.getItem('taskOracle_activeCampaign') || campaigns[0].id;
+    // Ensure activeCampaignId actually exists (in case a campaign was deleted)
+    if (!state.campaigns.find(c => c.id === state.activeCampaignId)) {
+      state.activeCampaignId = state.campaigns[0].id;
+    }
+  } else {
+    // First launch — create a single default campaign
+    const first = makeDefaultCampaign('My Tasks', '🎯');
+    state.campaigns        = [first];
+    state.activeCampaignId = first.id;
+  }
+
   state.settings = JSON.parse(localStorage.getItem('taskOracle_settings')) || {...DEFAULT_SETTINGS};
 }
 
 
 // ────────────────────────────────────────────────────────────
-// UNIQUE ID generator
+// UNIQUE ID
 // ────────────────────────────────────────────────────────────
 
 function makeId() {
-  // Simple: timestamp + random string. No library needed.
   return 'id-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
 }
 
 
 // ────────────────────────────────────────────────────────────
-// VIEW NAVIGATION — toggle which view is visible
+// VIEW NAVIGATION
 // ────────────────────────────────────────────────────────────
 
 function showView(id) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   const target = document.getElementById('view-' + id);
   if (target) target.classList.add('active');
-
-  // Refresh board data whenever we return to it
   if (id === 'board') renderBoard();
-
-  // Scroll to top when switching views
   window.scrollTo(0, 0);
 }
 
 
 // ────────────────────────────────────────────────────────────
-// BOARD RENDERING — draws all tasks and cards
+// CAMPAIGN BAR
+// ────────────────────────────────────────────────────────────
+
+function renderCampaignBar() {
+  const bar = document.getElementById('campaign-bar');
+  const ac  = activeCampaign();
+  if (!ac) return;
+
+  let html = state.campaigns.map(c => `
+    <button
+      class="campaign-tab ${c.id === state.activeCampaignId ? 'active' : ''}"
+      onclick="handleCampaignTabTap('${c.id}')"
+      title="${escapeHtml(c.name)}"
+    >
+      <div class="campaign-tab-emoji">${c.emoji}</div>
+      <div class="campaign-tab-name">${escapeHtml(c.name)}</div>
+    </button>
+  `).join('');
+
+  // Show "+" only if fewer than 4 campaigns
+  if (state.campaigns.length < 4) {
+    html += `<button class="campaign-tab campaign-tab-add" onclick="openCampaignModal(null)" title="New campaign">＋</button>`;
+  }
+
+  bar.innerHTML = html;
+}
+
+function handleCampaignTabTap(id) {
+  if (id === state.activeCampaignId) {
+    // Tapping the active campaign opens its edit modal
+    openCampaignModal(id);
+  } else {
+    switchCampaign(id);
+  }
+}
+
+function switchCampaign(id) {
+  state.activeCampaignId = id;
+  saveState();
+  renderBoard();
+  renderCampaignBar();
+  showToast(`📋 ${activeCampaign().name}`);
+}
+
+
+// ────────────────────────────────────────────────────────────
+// CAMPAIGN MODAL — create / edit / delete
+// ────────────────────────────────────────────────────────────
+
+let modalCampaignEmoji = '🎯'; // tracks emoji selection during modal
+
+function openCampaignModal(campaignId) {
+  const modal  = document.getElementById('modal-campaign');
+  const isNew  = !campaignId;
+  const title  = document.getElementById('modal-campaign-title');
+  const nameEl = document.getElementById('campaign-name');
+  const delRow = document.getElementById('campaign-delete-row');
+
+  document.getElementById('campaign-id').value = campaignId || '';
+  title.textContent = isNew ? 'New Campaign' : 'Edit Campaign';
+  delRow.style.display = isNew ? 'none' : 'block';
+
+  if (isNew) {
+    nameEl.value        = '';
+    modalCampaignEmoji  = '🎯';
+  } else {
+    const campaign      = state.campaigns.find(c => c.id === campaignId);
+    if (!campaign) return;
+    nameEl.value        = campaign.name;
+    modalCampaignEmoji  = campaign.emoji;
+  }
+
+  renderEmojiPicker();
+  modal.classList.add('open');
+}
+
+function renderEmojiPicker() {
+  const picker = document.getElementById('emoji-picker');
+  picker.innerHTML = CAMPAIGN_EMOJIS.map(e => `
+    <button
+      class="emoji-option ${e === modalCampaignEmoji ? 'selected' : ''}"
+      onclick="selectCampaignEmoji('${e}')"
+    >${e}</button>
+  `).join('');
+}
+
+function selectCampaignEmoji(emoji) {
+  modalCampaignEmoji = emoji;
+  renderEmojiPicker();
+}
+
+function saveCampaign() {
+  const name       = document.getElementById('campaign-name').value.trim();
+  const campaignId = document.getElementById('campaign-id').value;
+  const isNew      = !campaignId;
+
+  if (!name) { showToast('Campaign needs a name.'); return; }
+
+  if (isNew) {
+    if (state.campaigns.length >= 4) {
+      showToast('Maximum 4 campaigns.');
+      return;
+    }
+    // New campaigns start empty (no pre-seeded tasks — user builds it fresh)
+    const campaign = {
+      id:     makeId(),
+      name,
+      emoji:  modalCampaignEmoji,
+      tasks:  [],
+      curses: DEFAULT_CURSES.map(c => ({...c, id: makeId()})),
+      buffs:  DEFAULT_BUFFS.map(b => ({...b, id: makeId()}))
+    };
+    state.campaigns.push(campaign);
+    state.activeCampaignId = campaign.id;
+  } else {
+    const idx = state.campaigns.findIndex(c => c.id === campaignId);
+    if (idx !== -1) {
+      state.campaigns[idx].name  = name;
+      state.campaigns[idx].emoji = modalCampaignEmoji;
+    }
+  }
+
+  saveState();
+  closeModal('modal-campaign');
+  renderCampaignBar();
+  renderBoard();
+  showToast(isNew ? `Campaign "${name}" created!` : 'Campaign updated.');
+}
+
+function deleteCampaign() {
+  const campaignId = document.getElementById('campaign-id').value;
+  if (!campaignId) return;
+
+  if (state.campaigns.length <= 1) {
+    showToast('Can\'t delete your last campaign.');
+    return;
+  }
+
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  if (!confirm(`Delete campaign "${campaign ? campaign.name : ''}" and all its tasks?`)) return;
+
+  state.campaigns = state.campaigns.filter(c => c.id !== campaignId);
+
+  // If the deleted one was active, switch to the first remaining
+  if (state.activeCampaignId === campaignId) {
+    state.activeCampaignId = state.campaigns[0].id;
+  }
+
+  saveState();
+  closeModal('modal-campaign');
+  renderCampaignBar();
+  renderBoard();
+  showToast('Campaign deleted.');
+}
+
+
+// ────────────────────────────────────────────────────────────
+// BOARD RENDERING
 // ────────────────────────────────────────────────────────────
 
 function renderBoard() {
-  renderTaskList('challenge-list', 'challenge');
-  renderTaskList('neutral-list',   'neutral');
-  renderTaskList('reward-list',    'reward');
-  renderCardList('curse-list',     'curse');
-  renderCardList('buff-list',      'buff');
+  const ac = activeCampaign();
+  if (!ac) return;
+
+  // Update the board header to show which campaign is active
+  const heading = document.getElementById('board-campaign-name');
+  if (heading) heading.textContent = `${ac.emoji} ${ac.name}`;
+
+  renderTaskList('challenge-list', 'challenge', ac.tasks);
+  renderTaskList('neutral-list',   'neutral',   ac.tasks);
+  renderTaskList('reward-list',    'reward',    ac.tasks);
+  renderCardList('curse-list',  'curse', ac.curses);
+  renderCardList('buff-list',   'buff',  ac.buffs);
   updateRerollBadge();
 }
 
-function renderTaskList(containerId, zone) {
+function renderTaskList(containerId, zone, allTasks) {
   const container = document.getElementById(containerId);
-  const tasks = state.tasks.filter(t => t.zone === zone);
+  const tasks     = allTasks.filter(t => t.zone === zone);
 
   if (tasks.length === 0) {
     container.innerHTML = '<div class="empty-state">No tasks yet.</div>';
     return;
   }
 
-  // Build HTML for each task card
   container.innerHTML = tasks.map(task => `
     <div class="task-card ${zone}" onclick="openTaskModal('${task.id}')">
       <div>
         <div class="task-card-title">${escapeHtml(task.title)}</div>
         ${task.desc ? `<div class="task-card-meta" style="font-style:italic;">${escapeHtml(task.desc)}</div>` : ''}
       </div>
-      <div style="display:flex;align-items:center;gap:6px;">
+      <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
         <span class="task-card-meta">${task.minutes}m</span>
         <span style="font-size:1rem;">${vibeEmoji(task.vibe)}</span>
       </div>
@@ -200,18 +370,17 @@ function renderTaskList(containerId, zone) {
   `).join('');
 }
 
-function renderCardList(containerId, type) {
+function renderCardList(containerId, type, deck) {
   const container = document.getElementById(containerId);
-  const cards = type === 'curse' ? state.curses : state.buffs;
 
-  if (cards.length === 0) {
+  if (!deck || deck.length === 0) {
     container.innerHTML = '<div class="empty-state">No cards yet.</div>';
     return;
   }
 
-  container.innerHTML = cards.map(card => `
+  container.innerHTML = deck.map(card => `
     <div class="special-card ${type}" onclick="openCardModal('${card.id}', '${type}')">
-      <div class="special-card-text ${!card.enabled ? 'strikethrough' : ''}">
+      <div class="special-card-text" style="${!card.enabled ? 'text-decoration:line-through;opacity:0.5;' : ''}">
         ${escapeHtml(card.text)}
       </div>
       <span style="font-size:0.75rem;color:var(--text-dim);margin-left:8px;white-space:nowrap;">
@@ -221,91 +390,50 @@ function renderCardList(containerId, type) {
   `).join('');
 }
 
+// Helpers
 function vibeEmoji(vibe) {
-  return ['', '😩', '😕', '😐', '🙂', '🌟'][vibe] || '😐';
+  return ['','😩','😕','😐','🙂','🌟'][vibe] || '😐';
 }
-
-// vibe → zone mapping
 function vibeToZone(vibe) {
   if (vibe <= 2) return 'challenge';
   if (vibe === 3) return 'neutral';
   return 'reward';
 }
-
-// zone → zone label
 function zoneLabel(zone) {
-  if (zone === 'challenge') return 'Challenge Zone';
-  if (zone === 'neutral')   return 'Neutral Zone';
-  if (zone === 'reward')    return 'Reward Zone';
-  if (zone === 'curse')     return 'Curse Card';
-  if (zone === 'buff')      return 'Buff Card';
-  return zone;
+  const labels = { challenge:'Challenge Zone', neutral:'Neutral Zone', reward:'Reward Zone', curse:'Curse Card', buff:'Buff Card' };
+  return labels[zone] || zone;
 }
-
-// zone → roll range label
-function zoneRollRange(zone) {
-  if (zone === 'challenge') return 'Rolls 2–9';
-  if (zone === 'neutral')   return 'Rolls 10–11';
-  if (zone === 'reward')    return 'Rolls 12–19';
-  if (zone === 'curse')     return 'Natural 1';
-  if (zone === 'buff')      return 'Natural 20';
-  return '';
-}
-
-// zone → emoji icon
 function zoneIcon(zone) {
-  if (zone === 'challenge') return '⚔️';
-  if (zone === 'neutral')   return '😐';
-  if (zone === 'reward')    return '🌟';
-  if (zone === 'curse')     return '💀';
-  if (zone === 'buff')      return '✨';
-  return '🎲';
+  const icons = { challenge:'⚔️', neutral:'😐', reward:'🌟', curse:'💀', buff:'✨' };
+  return icons[zone] || '🎲';
 }
-
-// HTML escape for user-entered strings (prevents XSS)
 function escapeHtml(str) {
   if (!str) return '';
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
-
-// Reroll badge in header
 function updateRerollBadge() {
   const rerolls = state.settings.rerolls || 0;
-  const badge = document.getElementById('reroll-badge');
-  const count = document.getElementById('reroll-count');
-  if (rerolls > 0) {
-    badge.classList.add('visible');
-    count.textContent = rerolls;
-  } else {
-    badge.classList.remove('visible');
-  }
+  const badge   = document.getElementById('reroll-badge');
+  const count   = document.getElementById('reroll-count');
+  if (rerolls > 0) { badge.classList.add('visible'); count.textContent = rerolls; }
+  else { badge.classList.remove('visible'); }
 }
 
 
 // ────────────────────────────────────────────────────────────
-// BUILD THE MANUAL NUMBER GRID (1–20)
-// Each button is color-coded by its zone
+// MANUAL ROLL GRID (1–20)
 // ────────────────────────────────────────────────────────────
 
 function buildNumberGrid() {
   const grid = document.getElementById('manual-grid');
-  const numbers = Array.from({length: 20}, (_, i) => i + 1); // [1, 2, ... 20]
-
-  grid.innerHTML = numbers.map(n => {
-    // Assign a CSS class for the zone color
-    let zoneClass = '';
-    if (n === 1)              zoneClass = 'zone-curse';
-    else if (n >= 2  && n <= 9)  zoneClass = 'zone-challenge';
-    else if (n >= 10 && n <= 11) zoneClass = 'zone-neutral';
-    else if (n >= 12 && n <= 19) zoneClass = 'zone-reward';
-    else if (n === 20)           zoneClass = 'zone-buff';
-
-    return `<button class="grid-btn ${zoneClass}" onclick="doManualRoll(${n})">${n}</button>`;
+  grid.innerHTML = Array.from({length:20}, (_,i) => i+1).map(n => {
+    let zClass = '';
+    if (n === 1)              zClass = 'zone-curse';
+    else if (n <= 9)          zClass = 'zone-challenge';
+    else if (n <= 11)         zClass = 'zone-neutral';
+    else if (n <= 19)         zClass = 'zone-reward';
+    else                      zClass = 'zone-buff';
+    return `<button class="grid-btn ${zClass}" onclick="doManualRoll(${n})">${n}</button>`;
   }).join('');
 }
 
@@ -315,46 +443,34 @@ function buildNumberGrid() {
 // ────────────────────────────────────────────────────────────
 
 function doDigitalRoll() {
-  // Animate the die, then resolve after the animation plays
-  const btn = document.getElementById('btn-digital-roll');
+  const btn     = document.getElementById('btn-digital-roll');
   const display = document.getElementById('roll-number-display');
-  const label = document.getElementById('roll-label');
+  const label   = document.getElementById('roll-label');
 
-  // Prevent double-clicking during animation
   if (btn.classList.contains('rolling')) return;
-
   btn.classList.add('rolling');
   label.textContent = 'ROLLING...';
 
-  // Rapid number flicker during spin
   let flickerCount = 0;
-  const flickerInterval = setInterval(() => {
+  const flicker = setInterval(() => {
     display.textContent = Math.floor(Math.random() * 20) + 1;
-    flickerCount++;
-    if (flickerCount > 12) {
-      clearInterval(flickerInterval);
-    }
+    if (++flickerCount > 12) clearInterval(flicker);
   }, 60);
 
-  // Settle on the real result after animation (800ms)
   setTimeout(() => {
     const roll = Math.floor(Math.random() * 20) + 1;
     display.textContent = roll;
     label.textContent   = 'ROLLED';
     btn.classList.remove('rolling');
-
-    // Short pause so the number is readable, then resolve
     setTimeout(() => resolveRoll(roll), 500);
   }, 800);
 }
 
 function doManualRoll(n) {
-  // Highlight the tapped button briefly
   const btns = document.querySelectorAll('.grid-btn');
   btns.forEach(b => b.style.opacity = '0.4');
-  event.target.style.opacity = '1';
+  event.target.style.opacity   = '1';
   event.target.style.transform = 'scale(1.15)';
-
   setTimeout(() => {
     btns.forEach(b => { b.style.opacity = ''; b.style.transform = ''; });
     resolveRoll(n);
@@ -363,78 +479,58 @@ function doManualRoll(n) {
 
 function resolveRoll(roll) {
   state.lastRoll = roll;
-
+  const ac = activeCampaign();
   let zone, task = null, card = null;
 
   if (roll === 1) {
-    // ── Natural 1: Curse Card ──
     zone = 'curse';
-    const enabledCurses = state.curses.filter(c => c.enabled);
-    if (enabledCurses.length > 0) {
-      card = enabledCurses[Math.floor(Math.random() * enabledCurses.length)];
-    } else {
-      card = { text: 'No curse cards active. You got lucky this time.' };
-    }
+    const deck = ac.curses.filter(c => c.enabled);
+    card = deck.length > 0
+      ? deck[Math.floor(Math.random() * deck.length)]
+      : { text: 'No curse cards active. You escaped this one.' };
 
   } else if (roll === 20) {
-    // ── Natural 20: Buff Card ──
     zone = 'buff';
-    const enabledBuffs = state.buffs.filter(b => b.enabled);
-    if (enabledBuffs.length > 0) {
-      card = enabledBuffs[Math.floor(Math.random() * enabledBuffs.length)];
-    } else {
-      card = { text: 'No buff cards active. Bask in your natural 20.' };
-    }
+    const deck = ac.buffs.filter(b => b.enabled);
+    card = deck.length > 0
+      ? deck[Math.floor(Math.random() * deck.length)]
+      : { text: 'No buff cards active. Bask in your natural 20.' };
+    // If the card mentions a reroll, bank one
+    if (card.text && card.text.toLowerCase().includes('reroll')) bankReroll();
 
   } else if (roll >= 2 && roll <= 9) {
-    // ── Challenge zone ──
     zone = 'challenge';
-    const pool = state.tasks.filter(t => t.zone === 'challenge');
+    const pool = ac.tasks.filter(t => t.zone === 'challenge');
     task = pool.length > 0 ? pool[Math.floor(Math.random() * pool.length)] : null;
 
   } else if (roll >= 10 && roll <= 11) {
-    // ── Neutral zone — behavior depends on settings ──
     zone = 'neutral';
     const behavior = state.settings.neutralBehavior || 'reroll';
-
     if (behavior === 'reroll') {
-      // Auto-reroll once (show a toast so user knows)
       showToast('Neutral roll — rerolling...');
-      setTimeout(() => {
-        const newRoll = Math.floor(Math.random() * 20) + 1;
-        resolveRoll(newRoll);
-      }, 800);
-      return; // exit early — the re-resolve will handle the result
-
+      setTimeout(() => resolveRoll(Math.floor(Math.random() * 20) + 1), 800);
+      return;
     } else if (behavior === 'choice') {
-      // Let the user pick any task
-      task = null; // result screen will handle this
-      card = { text: 'Neutral roll! You get to choose any task from the board.' };
-
-    } else if (behavior === 'pool') {
-      const pool = state.tasks.filter(t => t.zone === 'neutral');
-      task = pool.length > 0 ? pool[Math.floor(Math.random() * pool.length)] : null;
-      if (!task) {
-        // Fallback: reroll if pool is empty
+      card = { text: 'Neutral roll! Choose any task from the board.' };
+    } else {
+      const pool = ac.tasks.filter(t => t.zone === 'neutral');
+      if (pool.length === 0) {
         showToast('Neutral pool empty — rerolling...');
         setTimeout(() => resolveRoll(Math.floor(Math.random() * 20) + 1), 800);
         return;
       }
+      task = pool[Math.floor(Math.random() * pool.length)];
     }
 
-  } else if (roll >= 12 && roll <= 19) {
-    // ── Reward zone ──
+  } else {
     zone = 'reward';
-    const pool = state.tasks.filter(t => t.zone === 'reward');
+    const pool = ac.tasks.filter(t => t.zone === 'reward');
     task = pool.length > 0 ? pool[Math.floor(Math.random() * pool.length)] : null;
   }
 
-  // Store in state for use by timer and completion screens
   state.currentTask = task;
   state.currentCard = card;
   state.currentZone = zone;
-
-  // Build the result screen, then navigate to it
   showResultScreen(roll, zone, task, card);
 }
 
@@ -444,12 +540,10 @@ function resolveRoll(roll) {
 // ────────────────────────────────────────────────────────────
 
 function showResultScreen(roll, zone, task, card) {
-  // Badge: "Roll 7 — Challenge Zone"
   const badge = document.getElementById('result-badge');
   badge.textContent = `Roll ${roll} — ${zoneLabel(zone)}`;
-  badge.className = 'result-roll-badge ' + zone;
+  badge.className   = 'result-roll-badge ' + zone;
 
-  // Card container
   const cardEl = document.getElementById('result-card');
   cardEl.className = 'result-card ' + zone;
 
@@ -460,35 +554,21 @@ function showResultScreen(roll, zone, task, card) {
   const rerollBtn = document.getElementById('btn-reroll-result');
 
   if (task) {
-    // Normal task result
-    document.getElementById('result-title').textContent = task.title;
-    document.getElementById('result-desc').textContent  = task.desc || zoneLabel(zone);
-    document.getElementById('result-duration').value    = task.minutes;
-
+    document.getElementById('result-title').textContent    = task.title;
+    document.getElementById('result-desc').textContent     = task.desc || zoneLabel(zone);
+    document.getElementById('result-duration').value       = task.minutes;
     timerRow.style.display  = 'flex';
     startBtn.style.display  = 'block';
     rerollBtn.style.display = 'none';
-
   } else if (card) {
-    // Curse or buff card
-    document.getElementById('result-title').textContent = zone === 'curse' ? '💀 Curse Card' : '✨ Buff Card';
-    document.getElementById('result-desc').textContent  = card.text;
-
+    document.getElementById('result-title').textContent    = zone === 'curse' ? '💀 Curse Card' : zone === 'buff' ? '✨ Buff Card' : '🎲 Neutral';
+    document.getElementById('result-desc').textContent     = card.text;
     timerRow.style.display  = 'none';
     startBtn.style.display  = 'none';
     rerollBtn.style.display = 'block';
-
-    // If it's a buff that banks a reroll, handle it
-    if (zone === 'buff' && card.text && card.text.toLowerCase().includes('reroll')) {
-      bankReroll();
-    }
-
   } else {
-    // Empty pool — no tasks in this zone
-    const zoneName = zoneLabel(zone);
-    document.getElementById('result-title').textContent = `No ${zoneName} tasks`;
-    document.getElementById('result-desc').textContent  = 'Add some tasks to this zone to get results here.';
-
+    document.getElementById('result-title').textContent    = `No ${zoneLabel(zone)} tasks`;
+    document.getElementById('result-desc').textContent     = 'Add some tasks to this zone first.';
     timerRow.style.display  = 'none';
     startBtn.style.display  = 'none';
     rerollBtn.style.display = 'block';
@@ -504,72 +584,56 @@ function showResultScreen(roll, zone, task, card) {
 
 function startTimer() {
   const minutes = parseInt(document.getElementById('result-duration').value) || 25;
-  const seconds = minutes * 60;
-
-  state.timerDuration  = seconds;
-  state.timerRemaining = seconds;
+  state.timerDuration  = minutes * 60;
+  state.timerRemaining = minutes * 60;
   state.timerRunning   = true;
   state.timerTaskTitle = state.currentTask ? state.currentTask.title : 'Task';
 
-  // Set task name on timer screen
   document.getElementById('timer-task-name').textContent = state.timerTaskTitle;
   document.getElementById('timer-task-sub').textContent  = state.currentZone ? zoneLabel(state.currentZone) : '';
-
-  // Reset progress bar
-  document.getElementById('timer-progress').style.width = '100%';
-  document.getElementById('btn-pause').textContent = '⏸ Pause';
+  document.getElementById('timer-progress').style.width  = '100%';
+  document.getElementById('btn-pause').textContent       = '⏸ Pause';
 
   updateTimerDisplay();
-  playGong(); // gong on start
+  playGong();
 
-  // Start the countdown interval (fires every second)
   clearInterval(state.timerInterval);
   state.timerInterval = setInterval(tickTimer, 1000);
-
   showView('timer');
 }
 
 function tickTimer() {
   if (!state.timerRunning) return;
-
   state.timerRemaining--;
-
   if (state.timerRemaining <= 0) {
     state.timerRemaining = 0;
     clearInterval(state.timerInterval);
     state.timerRunning = false;
     updateTimerDisplay();
-    playGong(); // gong when done
+    playGong();
     setTimeout(() => showCompletionScreen(), 800);
     return;
   }
-
   updateTimerDisplay();
 }
 
 function updateTimerDisplay() {
-  const mins = Math.floor(state.timerRemaining / 60);
-  const secs = state.timerRemaining % 60;
+  const mins    = Math.floor(state.timerRemaining / 60);
+  const secs    = state.timerRemaining % 60;
   const display = document.getElementById('timer-display');
   display.textContent = `${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')}`;
-
-  // Color the timer based on how much time is left
   const pct = state.timerRemaining / state.timerDuration;
   display.classList.remove('warning','urgent');
   if (pct < 0.1) display.classList.add('urgent');
   else if (pct < 0.25) display.classList.add('warning');
-
-  // Progress bar (shrinks as time passes)
   document.getElementById('timer-progress').style.width = (pct * 100) + '%';
 }
 
 function togglePause() {
   state.timerRunning = !state.timerRunning;
   const btn = document.getElementById('btn-pause');
-
   if (state.timerRunning) {
     btn.textContent = '⏸ Pause';
-    // Restart the interval
     clearInterval(state.timerInterval);
     state.timerInterval = setInterval(tickTimer, 1000);
   } else {
@@ -579,7 +643,6 @@ function togglePause() {
 }
 
 function timerDoneEarly() {
-  // User finished before the timer ran out
   clearInterval(state.timerInterval);
   state.timerRunning = false;
   playGong();
@@ -587,71 +650,43 @@ function timerDoneEarly() {
 }
 
 function abandonTimer() {
-  // User bails on the task entirely
   clearInterval(state.timerInterval);
   state.timerRunning = false;
   showView('board');
 }
 
 function skipTimer() {
-  // On result screen: mark done without starting a timer
   showCompletionScreen();
 }
 
 
 // ────────────────────────────────────────────────────────────
-// GONG SOUND via Web Audio API — no audio file needed
+// GONG — Web Audio API, no file needed
 // ────────────────────────────────────────────────────────────
 
 function playGong() {
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
-
-    // Fundamental tone — the main gong body
-    const osc1  = ctx.createOscillator();
-    const gain1 = ctx.createGain();
-    osc1.type = 'sine';
-    osc1.frequency.setValueAtTime(200, ctx.currentTime);
-    osc1.frequency.exponentialRampToValueAtTime(160, ctx.currentTime + 0.15);
-    gain1.gain.setValueAtTime(0.7, ctx.currentTime);
-    gain1.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 4.0);
-    osc1.connect(gain1);
-    gain1.connect(ctx.destination);
-    osc1.start(ctx.currentTime);
-    osc1.stop(ctx.currentTime + 4.0);
-
-    // Second harmonic — adds warmth
-    const osc2  = ctx.createOscillator();
-    const gain2 = ctx.createGain();
-    osc2.type = 'sine';
-    osc2.frequency.setValueAtTime(480, ctx.currentTime);
-    osc2.frequency.exponentialRampToValueAtTime(420, ctx.currentTime + 0.08);
-    gain2.gain.setValueAtTime(0.3, ctx.currentTime);
-    gain2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 2.5);
-    osc2.connect(gain2);
-    gain2.connect(ctx.destination);
-    osc2.start(ctx.currentTime);
-    osc2.stop(ctx.currentTime + 2.5);
-
-    // High shimmer — the attack click
-    const osc3  = ctx.createOscillator();
-    const gain3 = ctx.createGain();
-    osc3.type = 'triangle';
-    osc3.frequency.setValueAtTime(1200, ctx.currentTime);
-    gain3.gain.setValueAtTime(0.15, ctx.currentTime);
-    gain3.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
-    osc3.connect(gain3);
-    gain3.connect(ctx.destination);
-    osc3.start(ctx.currentTime);
-    osc3.stop(ctx.currentTime + 0.3);
-
-    // Clean up the AudioContext after the sound finishes
+    const layers = [
+      { type:'sine',     freq:200, freqEnd:160, vol:0.7, volEnd:0.001, dur:4.0 },
+      { type:'sine',     freq:480, freqEnd:420, vol:0.3, volEnd:0.001, dur:2.5 },
+      { type:'triangle', freq:1200,freqEnd:1200,vol:0.15,volEnd:0.001, dur:0.3 }
+    ];
+    layers.forEach(l => {
+      const osc  = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = l.type;
+      osc.frequency.setValueAtTime(l.freq, ctx.currentTime);
+      if (l.freqEnd !== l.freq) osc.frequency.exponentialRampToValueAtTime(l.freqEnd, ctx.currentTime + 0.15);
+      gain.gain.setValueAtTime(l.vol, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(l.volEnd, ctx.currentTime + l.dur);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + l.dur);
+    });
     setTimeout(() => ctx.close(), 5000);
-
-  } catch (e) {
-    // Audio not available — silent fallback (no crash)
-    console.log('Audio unavailable:', e.message);
-  }
+  } catch(e) { /* silent fallback */ }
 }
 
 
@@ -660,61 +695,48 @@ function playGong() {
 // ────────────────────────────────────────────────────────────
 
 function showCompletionScreen() {
-  const heading  = document.getElementById('complete-heading');
-  const taskName = document.getElementById('complete-task-name');
-
-  heading.textContent  = state.timerRemaining === 0 ? "Time's Up!" : 'Done?';
-  taskName.textContent = state.timerTaskTitle || 'That task';
-
+  document.getElementById('complete-heading').textContent  = state.timerRemaining === 0 ? "Time's Up!" : 'Done?';
+  document.getElementById('complete-task-name').textContent = state.timerTaskTitle || 'That task';
   showView('complete');
 }
 
 function resolveTask(outcome) {
-  // outcome: 'complete' | 'partial' | 'incomplete'
   const task = state.currentTask;
-
-  if (!task) {
-    showView('board');
-    return;
-  }
+  if (!task) { showView('board'); return; }
 
   if (outcome === 'complete') {
-    // Handle the task's keep setting
     if (task.keep === 'remove') {
       removeTask(task.id);
-      showToast('Task completed and removed from board.');
+      showToast('Task completed and removed.');
     } else if (task.keep === 'ask') {
-      // Ask via a simple confirm
-      const shouldRemove = confirm(`Remove "${task.title}" from the board?`);
-      if (shouldRemove) removeTask(task.id);
-      showToast(shouldRemove ? 'Task removed.' : 'Task kept on board.');
+      if (confirm(`Remove "${task.title}" from the board?`)) {
+        removeTask(task.id);
+        showToast('Task removed.');
+      } else {
+        showToast('Task kept on board.');
+      }
     } else {
-      // 'keep' — stays on board
-      showToast('✅ Task complete! Still on the board.');
+      showToast('✅ Complete! Task stays on the board.');
     }
     task.completedAt = new Date().toISOString();
     saveState();
-
   } else if (outcome === 'partial') {
     showToast('⏳ Partial — task stays on the board.');
-    // No change to the task list
-
   } else {
-    // incomplete
     showToast('Task stays on the board.');
   }
-
   showView('board');
 }
 
 function removeTask(id) {
-  state.tasks = state.tasks.filter(t => t.id !== id);
+  const ac  = activeCampaign();
+  ac.tasks  = ac.tasks.filter(t => t.id !== id);
   saveState();
 }
 
 
 // ────────────────────────────────────────────────────────────
-// REROLLS — banked from Buff Cards
+// REROLLS
 // ────────────────────────────────────────────────────────────
 
 function bankReroll() {
@@ -724,53 +746,29 @@ function bankReroll() {
   updateRerollBadge();
 }
 
-function spendReroll() {
-  if ((state.settings.rerolls || 0) < 1) {
-    showToast('No rerolls banked.');
-    return;
-  }
-  state.settings.rerolls--;
-  saveState();
-  updateRerollBadge();
-  showToast('Reroll spent!');
-  showView('roll');
-}
-
 
 // ────────────────────────────────────────────────────────────
-// TASK MODAL — add / edit tasks
+// TASK MODAL
 // ────────────────────────────────────────────────────────────
 
-// selectedVibe and selectedDuration are form-level state
-// (not in main state — they only live during a modal open)
-let modalVibe = 3;
+let modalVibe     = 3;
 let modalDuration = 30;
 
 function openTaskModal(taskId, presetZone) {
-  const modal = document.getElementById('modal-task');
   const isNew = !taskId;
-
-  document.getElementById('modal-task-title').textContent = isNew ? 'Add Task' : 'Edit Task';
-  document.getElementById('task-delete-row').style.display = isNew ? 'none' : 'block';
-  document.getElementById('task-id').value = taskId || '';
+  document.getElementById('modal-task-title').textContent      = isNew ? 'Add Task' : 'Edit Task';
+  document.getElementById('task-delete-row').style.display     = isNew ? 'none' : 'block';
+  document.getElementById('task-id').value                     = taskId || '';
 
   if (isNew) {
-    // Reset form
     document.getElementById('task-name').value = '';
     document.getElementById('task-desc').value = '';
     document.getElementById('task-keep').value = 'keep';
-
-    // Default vibe based on presetZone
-    if (presetZone === 'challenge') modalVibe = 1;
-    else if (presetZone === 'reward') modalVibe = 5;
-    else modalVibe = 3;
-
+    modalVibe     = presetZone === 'challenge' ? 1 : presetZone === 'reward' ? 5 : 3;
     modalDuration = 30;
   } else {
-    // Fill in existing task data
-    const task = state.tasks.find(t => t.id === taskId);
+    const task = activeCampaign().tasks.find(t => t.id === taskId);
     if (!task) return;
-
     document.getElementById('task-name').value = task.title;
     document.getElementById('task-desc').value = task.desc || '';
     document.getElementById('task-keep').value = task.keep;
@@ -778,79 +776,52 @@ function openTaskModal(taskId, presetZone) {
     modalDuration = task.minutes;
   }
 
-  // Update UI for vibe and duration
   renderVibeButtons();
   renderDurationButtons();
   updateVibeHint();
-
-  modal.classList.add('open');
+  document.getElementById('modal-task').classList.add('open');
 }
 
-function selectVibe(n) {
-  modalVibe = n;
-  renderVibeButtons();
-  updateVibeHint();
-}
+function selectVibe(n)      { modalVibe = n; renderVibeButtons(); updateVibeHint(); }
+function selectDuration(m)  { modalDuration = m; renderDurationButtons(); document.getElementById('task-duration-custom').value = ''; }
 
 function renderVibeButtons() {
-  document.querySelectorAll('.vibe-btn').forEach(btn => {
-    const v = parseInt(btn.dataset.vibe);
-    btn.classList.toggle('selected', v === modalVibe);
-  });
+  document.querySelectorAll('.vibe-btn').forEach(b => b.classList.toggle('selected', parseInt(b.dataset.vibe) === modalVibe));
 }
-
-function updateVibeHint() {
-  const hint = document.getElementById('vibe-hint');
-  const zone = vibeToZone(modalVibe);
-  const labels = {
-    challenge: '→ Goes into Challenge Zone (rolls 2–9)',
-    neutral:   '→ Goes into Neutral Zone (rolls 10–11)',
-    reward:    '→ Goes into Reward Zone (rolls 12–19)'
-  };
-  hint.textContent = labels[zone];
-}
-
-function selectDuration(mins) {
-  modalDuration = mins;
-  renderDurationButtons();
-  // Clear the custom input since a preset was picked
-  document.getElementById('task-duration-custom').value = '';
-}
-
 function renderDurationButtons() {
-  document.querySelectorAll('.dur-btn').forEach(btn => {
-    const m = parseInt(btn.dataset.min);
-    btn.classList.toggle('selected', m === modalDuration);
-  });
+  document.querySelectorAll('.dur-btn').forEach(b => b.classList.toggle('selected', parseInt(b.dataset.min) === modalDuration));
+}
+function updateVibeHint() {
+  const labels = { challenge:'→ Challenge Zone (rolls 2–9)', neutral:'→ Neutral Zone (rolls 10–11)', reward:'→ Reward Zone (rolls 12–19)' };
+  document.getElementById('vibe-hint').textContent = labels[vibeToZone(modalVibe)];
 }
 
 function saveTask() {
   const name = document.getElementById('task-name').value.trim();
   if (!name) { showToast('Task needs a name.'); return; }
 
-  // Get duration from quick-pick or custom input
   const customDur = parseInt(document.getElementById('task-duration-custom').value);
   const duration  = customDur > 0 ? customDur : modalDuration;
-
-  const taskId = document.getElementById('task-id').value;
-  const isNew  = !taskId;
+  const taskId    = document.getElementById('task-id').value;
+  const isNew     = !taskId;
+  const ac        = activeCampaign();
 
   const taskData = {
-    id:       isNew ? makeId() : taskId,
-    title:    name,
-    desc:     document.getElementById('task-desc').value.trim(),
-    vibe:     modalVibe,
-    zone:     vibeToZone(modalVibe),
-    minutes:  duration || 30,
-    keep:     document.getElementById('task-keep').value,
+    id:          isNew ? makeId() : taskId,
+    title:       name,
+    desc:        document.getElementById('task-desc').value.trim(),
+    vibe:        modalVibe,
+    zone:        vibeToZone(modalVibe),
+    minutes:     duration || 30,
+    keep:        document.getElementById('task-keep').value,
     completedAt: null
   };
 
   if (isNew) {
-    state.tasks.push(taskData);
+    ac.tasks.push(taskData);
   } else {
-    const idx = state.tasks.findIndex(t => t.id === taskId);
-    if (idx !== -1) state.tasks[idx] = taskData;
+    const idx = ac.tasks.findIndex(t => t.id === taskId);
+    if (idx !== -1) ac.tasks[idx] = taskData;
   }
 
   saveState();
@@ -861,9 +832,9 @@ function saveTask() {
 
 function deleteTask() {
   const taskId = document.getElementById('task-id').value;
-  if (!taskId) return;
-  if (!confirm('Delete this task?')) return;
-  state.tasks = state.tasks.filter(t => t.id !== taskId);
+  if (!taskId || !confirm('Delete this task?')) return;
+  const ac = activeCampaign();
+  ac.tasks = ac.tasks.filter(t => t.id !== taskId);
   saveState();
   closeModal('modal-task');
   renderBoard();
@@ -872,57 +843,49 @@ function deleteTask() {
 
 
 // ────────────────────────────────────────────────────────────
-// CARD MODAL — add / edit curse or buff cards
+// CARD MODAL (curse / buff)
 // ────────────────────────────────────────────────────────────
 
 function openCardModal(cardId, type) {
-  const modal = document.getElementById('modal-card');
   const isNew = !cardId;
-
   document.getElementById('card-type').value  = type;
   document.getElementById('card-id').value    = cardId || '';
   document.getElementById('modal-card-title').textContent =
-    isNew ? `Add ${type === 'curse' ? 'Curse' : 'Buff'} Card` :
-            `Edit ${type === 'curse' ? 'Curse' : 'Buff'} Card`;
+    isNew ? `Add ${type === 'curse' ? 'Curse' : 'Buff'} Card`
+           : `Edit ${type === 'curse' ? 'Curse' : 'Buff'} Card`;
   document.getElementById('card-delete-row').style.display = isNew ? 'none' : 'block';
 
   if (isNew) {
     document.getElementById('card-text').value    = '';
     document.getElementById('card-enabled').checked = true;
   } else {
-    const deck = type === 'curse' ? state.curses : state.buffs;
+    const ac   = activeCampaign();
+    const deck = type === 'curse' ? ac.curses : ac.buffs;
     const card = deck.find(c => c.id === cardId);
     if (!card) return;
-    document.getElementById('card-text').value      = card.text;
-    document.getElementById('card-enabled').checked = card.enabled;
+    document.getElementById('card-text').value       = card.text;
+    document.getElementById('card-enabled').checked  = card.enabled;
   }
-
-  modal.classList.add('open');
+  document.getElementById('modal-card').classList.add('open');
 }
 
 function saveCard() {
-  const text = document.getElementById('card-text').value.trim();
+  const text    = document.getElementById('card-text').value.trim();
   if (!text) { showToast('Card needs some text.'); return; }
-
   const type    = document.getElementById('card-type').value;
   const cardId  = document.getElementById('card-id').value;
   const enabled = document.getElementById('card-enabled').checked;
   const isNew   = !cardId;
-  const deck    = type === 'curse' ? state.curses : state.buffs;
+  const ac      = activeCampaign();
+  const deck    = type === 'curse' ? ac.curses : ac.buffs;
 
-  const cardData = {
-    id:      isNew ? makeId() : cardId,
-    text,
-    enabled
-  };
-
+  const cardData = { id: isNew ? makeId() : cardId, text, enabled };
   if (isNew) {
     deck.push(cardData);
   } else {
     const idx = deck.findIndex(c => c.id === cardId);
     if (idx !== -1) deck[idx] = cardData;
   }
-
   saveState();
   closeModal('modal-card');
   renderBoard();
@@ -932,15 +895,10 @@ function saveCard() {
 function deleteCard() {
   const cardId = document.getElementById('card-id').value;
   const type   = document.getElementById('card-type').value;
-  if (!cardId) return;
-  if (!confirm('Delete this card?')) return;
-
-  if (type === 'curse') {
-    state.curses = state.curses.filter(c => c.id !== cardId);
-  } else {
-    state.buffs = state.buffs.filter(b => b.id !== cardId);
-  }
-
+  if (!cardId || !confirm('Delete this card?')) return;
+  const ac = activeCampaign();
+  if (type === 'curse') ac.curses = ac.curses.filter(c => c.id !== cardId);
+  else                  ac.buffs  = ac.buffs.filter(b  => b.id !== cardId);
   saveState();
   closeModal('modal-card');
   renderBoard();
@@ -953,153 +911,85 @@ function deleteCard() {
 // ────────────────────────────────────────────────────────────
 
 document.getElementById('btn-settings').addEventListener('click', () => {
-  // Populate settings modal with current values
-  const neutralBehavior = state.settings.neutralBehavior || 'reroll';
-  document.querySelectorAll('input[name="neutral"]').forEach(radio => {
-    radio.checked = (radio.value === neutralBehavior);
-  });
+  const nb = state.settings.neutralBehavior || 'reroll';
+  document.querySelectorAll('input[name="neutral"]').forEach(r => r.checked = (r.value === nb));
   document.getElementById('settings-rerolls').textContent = state.settings.rerolls || 0;
   document.getElementById('modal-settings').classList.add('open');
 });
 
 function saveSettings() {
-  const selected = document.querySelector('input[name="neutral"]:checked');
-  if (selected) state.settings.neutralBehavior = selected.value;
+  const sel = document.querySelector('input[name="neutral"]:checked');
+  if (sel) state.settings.neutralBehavior = sel.value;
   saveState();
   closeModal('modal-settings');
   showToast('Settings saved.');
 }
 
 function confirmReset() {
-  if (confirm('Reset ALL data? This wipes your tasks and cards. Cannot be undone.')) {
-    localStorage.removeItem('taskOracle_tasks');
-    localStorage.removeItem('taskOracle_curses');
-    localStorage.removeItem('taskOracle_buffs');
-    localStorage.removeItem('taskOracle_settings');
-    loadState();
-    renderBoard();
-    closeModal('modal-settings');
-    showToast('Data reset to defaults.');
-  }
+  if (!confirm('Reset ALL data? Wipes every campaign. Cannot be undone.')) return;
+  ['taskOracle_campaigns','taskOracle_activeCampaign','taskOracle_settings',
+   'taskOracle_tasks','taskOracle_curses','taskOracle_buffs'].forEach(k => localStorage.removeItem(k));
+  loadState();
+  renderCampaignBar();
+  renderBoard();
+  closeModal('modal-settings');
+  showToast('Data reset to defaults.');
 }
 
 
 // ────────────────────────────────────────────────────────────
-// EXPORT / IMPORT JSON backup
+// EXPORT / IMPORT
 // ────────────────────────────────────────────────────────────
 
 function exportData() {
   const data = {
-    tasks:    state.tasks,
-    curses:   state.curses,
-    buffs:    state.buffs,
-    settings: state.settings,
-    exported: new Date().toISOString()
+    version:   2,
+    campaigns: state.campaigns,
+    settings:  state.settings,
+    exported:  new Date().toISOString()
   };
-
-  // Create a downloadable JSON file
-  const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+  const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
   const url  = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href     = url;
-  link.download = 'task-oracle-backup.json';
-  link.click();
+  const a    = document.createElement('a');
+  a.href = url; a.download = 'task-oracle-backup.json'; a.click();
   URL.revokeObjectURL(url);
-
   showToast('Backup exported!');
 }
 
 function importData(event) {
   const file = event.target.files[0];
   if (!file) return;
-
   const reader = new FileReader();
-  reader.onload = (e) => {
+  reader.onload = e => {
     try {
       const data = JSON.parse(e.target.result);
-      if (!data.tasks && !data.curses && !data.buffs) {
-        throw new Error('Invalid format');
+      if (data.version === 2 && data.campaigns) {
+        // v2 format
+        state.campaigns        = data.campaigns;
+        state.activeCampaignId = data.campaigns[0].id;
+        if (data.settings) state.settings = data.settings;
+      } else if (data.tasks) {
+        // v1 format — wrap in a campaign
+        const c = { id: makeId(), name:'Imported', emoji:'📦', tasks: data.tasks, curses: data.curses || [], buffs: data.buffs || [] };
+        state.campaigns.push(c);
+        state.activeCampaignId = c.id;
+      } else {
+        throw new Error('Unknown format');
       }
-      if (data.tasks)    state.tasks    = data.tasks;
-      if (data.curses)   state.curses   = data.curses;
-      if (data.buffs)    state.buffs    = data.buffs;
-      if (data.settings) state.settings = data.settings;
-
       saveState();
+      renderCampaignBar();
       renderBoard();
       closeModal('modal-settings');
       showToast('Data imported!');
-    } catch (err) {
+    } catch(err) {
       showToast('Import failed — check file format.');
     }
   };
   reader.readAsText(file);
-
-  // Reset the file input so the same file can be re-imported if needed
   event.target.value = '';
 }
 
 
 // ────────────────────────────────────────────────────────────
 // MODAL UTILITIES
-// ────────────────────────────────────────────────────────────
-
-function closeModal(id) {
-  document.getElementById(id).classList.remove('open');
-}
-
-// Click outside the modal panel to close it
-function modalClickOutside(event, modalId) {
-  if (event.target.id === modalId) closeModal(modalId);
-}
-
-
-// ────────────────────────────────────────────────────────────
-// TOAST NOTIFICATIONS
-// Small feedback messages that auto-dismiss after 2s
-// ────────────────────────────────────────────────────────────
-
-let toastTimer = null;
-
-function showToast(message) {
-  const toast = document.getElementById('toast');
-  toast.textContent = message;
-  toast.classList.add('show');
-
-  // Clear any pending dismiss timer
-  if (toastTimer) clearTimeout(toastTimer);
-
-  toastTimer = setTimeout(() => {
-    toast.classList.remove('show');
-  }, 2200);
-}
-
-
-// ────────────────────────────────────────────────────────────
-// SERVICE WORKER REGISTRATION
-// ────────────────────────────────────────────────────────────
-
-function registerServiceWorker() {
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('./sw.js')
-      .then(reg => console.log('Task Oracle SW registered:', reg.scope))
-      .catch(err => console.log('SW registration failed:', err));
-  }
-}
-
-
-// ────────────────────────────────────────────────────────────
-// INIT — runs when the page loads
-// ────────────────────────────────────────────────────────────
-
-function init() {
-  loadState();         // Pull data from localStorage (or use defaults)
-  buildNumberGrid();   // Build the 1–20 manual roll grid
-  renderBoard();       // Draw the task board
-  registerServiceWorker();
-
-  console.log('Task Oracle ready. Roll the die.');
-}
-
-// Kick everything off once the DOM is ready
-document.addEventListener('DOMContentLoaded', init);
+// ────────�

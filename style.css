@@ -927,10 +927,13 @@ html, body {
   margin: 8px 0 20px;
 }
 
-/* ── Mobile adjustments ── */
-@media (max-width: 380px) {
-  #btn-digital-roll { width: 150px; height: 150px; }
-  #roll-number-display { font-size: 3rem; }
-  .timer-display { font-size: 4rem; }
-  .grid-btn { padding: 10px 0; font-size: 0.9rem; }
-}
+/* ── Campaign Bar ── */
+/* Fixed strip at the bottom — always visible, always one tap away */
+#campaign-bar {
+  position: fixed;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100%;
+  max-width: 480px;
+  background: var(--bg-d
