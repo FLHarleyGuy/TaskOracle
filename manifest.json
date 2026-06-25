@@ -1,0 +1,24 @@
+{
+  "name": "Task Oracle",
+  "short_name": "Task Oracle",
+  "description": "A D20-powered productivity oracle. Roll the die. Do the thing.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#2d1b0e",
+  "theme_color": "#2d1b0e",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
